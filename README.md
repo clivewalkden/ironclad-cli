@@ -86,9 +86,17 @@ ironclad scan <path> --third-party        # only findings involving a non-Magent
 ironclad scan <path> --strict             # fail on any conflict, not just high-risk
 ironclad scan <path> --quiet              # hide informational (Low) findings
 ironclad scan <path> --ignore-vendor Foo  # hide findings entirely within one vendor (repeatable)
+ironclad scan <path> --html report.html    # also write a self-contained HTML report
 ```
 
-`<path>` can be a Magento root, a bare `vendor/` directory, or a single unzipped extension.
+`<path>` can be a Magento root, a bare `vendor/` directory, an unzipped extension, or a `.zip`
+archive — Ironclad extracts the XML it needs to a temp directory, scans, and cleans up:
+
+```sh
+ironclad scan ~/Downloads/Vendor_Extension-1.4.2.zip
+```
+
+Findings point at paths inside the archive, so they stay meaningful after the temp copy is gone.
 
 **Start with `--third-party`.** Magento's own modules replace each other's defaults constantly, and
 that is by design — those findings dominate an unfiltered report and no one is going to patch core.
@@ -117,6 +125,21 @@ passes itself off as a clean one.
 | **Medium** | Two modules declare one layout block with a different class or template |
 | **Medium** | Two modules move the same layout element to different destinations |
 | **Low** | The same, but `<sequence>` pins the outcome — Magento's intended override mechanism |
+
+### Grade and score
+
+Every report carries a headline grade from **A** to **F**, plus a weighted score (High counts 10,
+Medium 3, Low 1) and that score per 100 modules so installs of different sizes can be compared.
+
+The grade is driven by high-risk findings, because those are the ones where nothing pins the outcome;
+Medium only moves the needle once it piles up. There is deliberately no "score out of 100" — there is
+no meaningful total to divide by, and inventing one would imply precision that is not there.
+
+Filters and the grade stay in step: run with `--third-party` and the grade describes only the findings
+you can act on.
+
+The HTML report is one self-contained file with inline CSS, no external requests and no JavaScript, so
+it renders from an email attachment and can go straight to a client.
 
 ### Why `<sequence>` matters so much
 
