@@ -75,7 +75,7 @@ ironclad update         # download and install it (add -y to skip the prompt)
 ```
 
 `update` needs write permission to wherever the binary lives — use `sudo` if you installed it to
-`/usr/local/bin`.
+`/usr/local/bin`. It replaces the running binary in place and verifies the download before doing so.
 
 ## Usage
 
