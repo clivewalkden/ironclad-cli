@@ -121,7 +121,8 @@ passes itself off as a clean one.
 |---|---|
 | **High** | Two modules replace the same class with different implementations and nothing pins which wins |
 | **High** | One module removes a layout element another module defines |
-| **Medium** | Plugins on one class share a `sortOrder`, so their order can shift between deploys |
+| **Medium** | Plugins share a `sortOrder` and a method, so their order can shift between deploys |
+| **High** | An `around` plugin never calls through, so plugins after it on that method never run |
 | **Medium** | Two modules declare one layout block with a different class or template |
 | **Medium** | Two modules move the same layout element to different destinations |
 | **High** | Two modules define the same virtual type on a different base class, unpinned |
@@ -147,6 +148,23 @@ about absolute risk; the filtered one is the one you can act on.
 
 The HTML report is one self-contained file with inline CSS, no external requests and no JavaScript, so
 it renders from an email attachment and can go straight to a client.
+
+### Plugins are compared per method, not per class
+
+Magento declares plugins against a *class*, but two plugins on one class only interfere if they
+intercept the same *method*. Ironclad reads each plugin class's PHP to find out which, so plugins
+that provably touch different methods are not reported at all. On ten production installs this
+roughly halved the medium-risk findings — 109 to 66 on the worst — because those were the ones that
+used to say "verify method overlap manually".
+
+It also makes the most damaging plugin mistake visible: an `around` plugin that never calls the
+callable it is given replaces the method outright, and every plugin with a higher `sortOrder` on that
+method silently never runs. On one store that was an extension's `around` on `getPagerUrl()` blocking
+another vendor's SEO pager rewriting entirely.
+
+Reading the PHP is lexical, not a full parse — Magento names interceptor methods after their target,
+so `afterGetName` is all the information needed. A plugin that inherits its methods from a parent
+class reports none, and those findings fall back to class-level wording.
 
 ### Why `<sequence>` matters so much
 
@@ -220,11 +238,9 @@ that shared a `sortOrder` with `Magento_Persistent` on the object driving full-p
 
 Worth reading before you trust a clean report:
 
-- **Plugins are matched per class, not per method.** Two plugins on one class may never touch the same
-  method. Findings say to verify manually rather than asserting breakage — method-level analysis needs
-  PHP parsing.
-- **`around` plugin behaviour is not analysed.** The worst real-world case — an `around` plugin that
-  never calls `$proceed()` and kills every plugin after it — cannot be seen in XML.
+- **Plugins that inherit interceptor methods fall back to class-level comparison.** Method names are
+  read from the plugin's own PHP, so a plugin whose `afterGetName` lives in a parent class reports no
+  methods and its findings say the overlap is unverified rather than guessing.
 - **No cross-area precedence.** `global` and each specific area are analysed separately, so a genuine
   global-versus-frontend conflict is missed.
 - **Every module on disk is assumed enabled.** `app/etc/config.php` is not read, so a disabled module
