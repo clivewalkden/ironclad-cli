@@ -124,6 +124,8 @@ passes itself off as a clean one.
 | **Medium** | Plugins on one class share a `sortOrder`, so their order can shift between deploys |
 | **Medium** | Two modules declare one layout block with a different class or template |
 | **Medium** | Two modules move the same layout element to different destinations |
+| **High** | Two modules define the same virtual type on a different base class, unpinned |
+| **High** | Module `<sequence>` declarations form a loop, so Magento will not boot |
 | **Low** | The same, but `<sequence>` pins the outcome — Magento's intended override mechanism |
 
 ### Grade and score
@@ -137,6 +139,11 @@ no meaningful total to divide by, and inventing one would imply precision that i
 
 Filters and the grade stay in step: run with `--third-party` and the grade describes only the findings
 you can act on.
+**Read the grade with `--third-party`.** Unfiltered, it is dominated by unpinned collisions inside
+Magento core and MSI, which nobody is going to fix — across ten production installs the unfiltered
+grade clustered at E/F and told us almost nothing. The same ten with `--third-party` graded C to E and
+ranked in an order that matched how messy those installs actually are. The unfiltered number is honest
+about absolute risk; the filtered one is the one you can act on.
 
 The HTML report is one self-contained file with inline CSS, no external requests and no JavaScript, so
 it renders from an email attachment and can go straight to a client.
@@ -174,6 +181,8 @@ Worth reading before you trust a clean report:
   is still analysed.
 - **Layout coverage is module-level.** Theme overrides under `app/design/**` are not merged, and
   handles are compared in isolation.
+- **Virtual types are not resolved transitively.** A name collision is reported, but a preference or
+  plugin reaching a class through a chain of virtual types is not followed to its concrete target.
 - **Nothing is inferred from generated code.** `var/` and `generated/` are skipped by design — you
   want warnings *before* `setup:di:compile`, not after.
 
