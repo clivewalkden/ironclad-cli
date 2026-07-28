@@ -160,6 +160,56 @@ or transitive `<sequence>` between the modules involved and ranks accordingly. W
 distinction a stock install reports around twenty "critical" conflicts that are all core working as
 intended.
 
+## Use it in CI
+
+Ironclad ships a composite GitHub Action. Add this to a Magento repo:
+
+```yaml
+name: Conflict scan
+on: [pull_request]
+
+permissions:
+  contents: read
+  pull-requests: write   # only needed for the PR comment
+
+jobs:
+  ironclad:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Ironclad reads vendor/, so it must exist.
+      - run: composer install --no-progress --no-interaction
+      - uses: clivewalkden/ironclad-cli@v0.5.0
+        with:
+          path: .
+          third-party: true
+```
+
+It downloads the pinned binary, verifies its checksum, scans, writes a job summary table, and posts
+(or updates) one pull request comment with the high-risk findings.
+
+| Input | Default | |
+|---|---|---|
+| `path` | `.` | Magento root, `vendor/` directory, or a `.zip` |
+| `version` | `latest` | Pin a version for reproducible findings |
+| `third-party` | `false` | Only findings involving a non-Magento module |
+| `ignore-vendor` | — | Space-separated vendors to hide internal findings for |
+| `strict` | `false` | Fail on any conflict, not just high-risk |
+| `quiet` | `false` | Hide informational findings |
+| `fail-on-conflicts` | `true` | Set `false` to report without blocking a merge |
+| `comment` | `true` | Post a PR comment |
+| `html-report` | — | Also write a self-contained HTML report here |
+
+Outputs `grade`, `high`, `medium`, `low` and `json` (a path to the full findings) for later steps.
+
+**When adopting on an existing store, start with `fail-on-conflicts: false`.** A first scan of a mature
+install typically finds a few high-risk items and dozens of mediums; blocking merges on day one just
+gets the check disabled. Read the report, fix or accept, then turn enforcement on.
+
+There is no diff-scoped mode, and that is deliberate: a conflict is a relationship *between* two
+modules, so knowing whether a changed module now collides with something needs the whole tree. A full
+scan takes a few seconds, so scoping to a diff would add complexity and miss findings.
+
 ## Vetting an extension before you install it
 
 Ironclad only reads XML, so you can test a candidate against a real codebase without touching it:

@@ -1,0 +1,305 @@
+# Reusable composite action, published to the public distribution repo so it can
+# be consumed as `clivewalkden/ironclad-cli@v<version>`.
+#
+# Kept in the source repo at docs/action.yml and synced on release, so it is
+# reviewed alongside the code whose flags it exposes.
+name: Ironclad Magento conflict scan
+description: >-
+  Detect Magento 2 extension conflicts by static analysis. No running Magento,
+  no database, no PHP.
+author: Clive Walkden
+
+branding:
+  icon: shield
+  color: red
+
+inputs:
+  path:
+    description: Path to scan — a Magento root, a vendor/ directory, or a .zip.
+    required: false
+    default: "."
+  version:
+    description: >-
+      Ironclad version to use, e.g. "0.5.0". Defaults to the latest release.
+      Pin this if you want the findings to be reproducible.
+    required: false
+    default: latest
+  third-party:
+    description: Only report findings involving at least one non-Magento module.
+    required: false
+    default: "false"
+  ignore-vendor:
+    description: Space-separated vendors whose internal findings are hidden.
+    required: false
+    default: ""
+  strict:
+    description: Fail on any conflict, not just high-risk ones.
+    required: false
+    default: "false"
+  quiet:
+    description: Hide informational (Low) findings.
+    required: false
+    default: "false"
+  fail-on-conflicts:
+    description: >-
+      Whether a conflict should fail the job. Set to "false" to report findings
+      without blocking a merge — useful when first adopting the tool.
+    required: false
+    default: "true"
+  comment:
+    description: >-
+      Post the findings as a pull request comment. Ignored outside pull request
+      events. Requires `permissions: pull-requests: write`.
+    required: false
+    default: "true"
+  html-report:
+    description: Path to also write a self-contained HTML report to.
+    required: false
+    default: ""
+
+outputs:
+  grade:
+    description: Overall grade, A through F.
+    value: ${{ steps.scan.outputs.grade }}
+  high:
+    description: Number of high-risk findings.
+    value: ${{ steps.scan.outputs.high }}
+  medium:
+    description: Number of medium-risk findings.
+    value: ${{ steps.scan.outputs.medium }}
+  low:
+    description: Number of low-risk findings.
+    value: ${{ steps.scan.outputs.low }}
+  json:
+    description: Path to the full findings JSON.
+    value: ${{ steps.scan.outputs.json }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install Ironclad
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        repo="clivewalkden/ironclad-cli"
+
+        # Asset labels match the release matrix exactly.
+        case "${RUNNER_OS}-${RUNNER_ARCH}" in
+          Linux-X64)   asset_target="linux-amd64";   archive="tar.gz" ;;
+          macOS-ARM64) asset_target="macos-arm64";   archive="tar.gz" ;;
+          Windows-X64) asset_target="windows-amd64"; archive="zip" ;;
+          *)
+            echo "::error::no Ironclad build for ${RUNNER_OS}-${RUNNER_ARCH}"
+            exit 1 ;;
+        esac
+
+        if [ "$VERSION" = "latest" ]; then
+          tag=$(gh release view --repo "$repo" --json tagName -q .tagName)
+        else
+          tag="v${VERSION#v}"
+        fi
+        echo "Installing Ironclad $tag for $asset_target"
+
+        workdir="$(mktemp -d)"
+        gh release download "$tag" --repo "$repo" \
+          --pattern "ironclad-${tag}-${asset_target}.${archive}" \
+          --pattern "SHA256SUMS" \
+          --dir "$workdir"
+
+        cd "$workdir"
+        file="ironclad-${tag}-${asset_target}.${archive}"
+
+        # Verify before unpacking, not after: a tampered archive should never be
+        # opened at all. Compare a single hash rather than running `-c` over the
+        # whole SHA256SUMS, because only one asset was downloaded and the flag to
+        # skip the rest is GNU-only — macOS runners have shasum, not sha256sum.
+        expected=$(awk -v f="$file" '$2 == f || $2 == "*" f { print $1 }' SHA256SUMS)
+        if [ -z "$expected" ]; then
+          echo "::error::$file is not listed in SHA256SUMS"
+          exit 1
+        fi
+        if command -v sha256sum > /dev/null; then
+          actual=$(sha256sum "$file" | cut -d' ' -f1)
+        else
+          actual=$(shasum -a 256 "$file" | cut -d' ' -f1)
+        fi
+        if [ "$expected" != "$actual" ]; then
+          echo "::error::checksum mismatch for $file (expected $expected, got $actual)"
+          exit 1
+        fi
+        echo "Checksum verified."
+
+        if [ "$archive" = "zip" ]; then
+          # Windows git-bash ships no unzip; the runner does have 7z, and
+          # PowerShell is the last resort.
+          if command -v unzip > /dev/null; then
+            unzip -q "$file"
+          elif command -v 7z > /dev/null; then
+            7z x -y "$file" > /dev/null
+          else
+            powershell -Command "Expand-Archive -Path '$file' -DestinationPath . -Force"
+          fi
+        else
+          tar -xzf "$file"
+        fi
+
+        install_dir="${RUNNER_TEMP}/ironclad-bin"
+        mkdir -p "$install_dir"
+        # Archives wrap the binary in a versioned directory.
+        find "ironclad-${tag}-${asset_target}" -maxdepth 1 -name 'ironclad*' -type f \
+          -exec cp {} "$install_dir/" \;
+        chmod +x "$install_dir"/ironclad* || true
+        echo "$install_dir" >> "$GITHUB_PATH"
+
+    - name: Scan
+      id: scan
+      shell: bash
+      env:
+        SCAN_PATH: ${{ inputs.path }}
+        THIRD_PARTY: ${{ inputs.third-party }}
+        IGNORE_VENDOR: ${{ inputs.ignore-vendor }}
+        STRICT: ${{ inputs.strict }}
+        QUIET: ${{ inputs.quiet }}
+        HTML_REPORT: ${{ inputs.html-report }}
+      run: |
+        set -uo pipefail
+        ironclad --version
+
+        args=(scan "$SCAN_PATH")
+        [ "$THIRD_PARTY" = "true" ] && args+=(--third-party)
+        [ "$STRICT" = "true" ] && args+=(--strict)
+        [ "$QUIET" = "true" ] && args+=(--quiet)
+        [ -n "$HTML_REPORT" ] && args+=(--html "$HTML_REPORT")
+        for vendor in $IGNORE_VENDOR; do
+          args+=(--ignore-vendor "$vendor")
+        done
+
+        json="${RUNNER_TEMP}/ironclad.json"
+
+        # Run twice on purpose: once for JSON to consume, once for readable log
+        # output. A scan is a few seconds, and it keeps the log free of JSON.
+        ironclad "${args[@]}" --json > "$json"
+        scan_status=$?
+        ironclad "${args[@]}" || true
+
+        if [ ! -s "$json" ]; then
+          echo "::error::Ironclad produced no output; see the log above"
+          exit 1
+        fi
+
+        # jq is preinstalled on GitHub-hosted runners.
+        grade=$(jq -r '.score.grade' "$json")
+        high=$(jq -r '.score.high' "$json")
+        medium=$(jq -r '.score.medium' "$json")
+        low=$(jq -r '.score.low' "$json")
+
+        {
+          echo "grade=$grade"
+          echo "high=$high"
+          echo "medium=$medium"
+          echo "low=$low"
+          echo "json=$json"
+          echo "status=$scan_status"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "Grade $grade — $high high, $medium medium, $low low"
+
+    - name: Job summary
+      shell: bash
+      env:
+        JSON: ${{ steps.scan.outputs.json }}
+      run: |
+        set -euo pipefail
+        {
+          echo "## Ironclad — Magento conflict scan"
+          echo
+          echo "**Grade ${{ steps.scan.outputs.grade }}** · \
+        ${{ steps.scan.outputs.high }} high · \
+        ${{ steps.scan.outputs.medium }} medium · \
+        ${{ steps.scan.outputs.low }} low"
+          echo
+          if [ "$(jq -r '.conflicts | length' "$JSON")" = "0" ]; then
+            echo "No conflicts found."
+          else
+            echo "| Risk | Kind | Area | Target | Modules |"
+            echo "|---|---|---|---|---|"
+            # Cap the table: a first adoption run can produce hundreds of rows,
+            # and a truncated table is stated rather than silently cut.
+            # `|` would break the table and raw <tags> would be stripped.
+            jq -r 'def cell: gsub("\\|"; "\\\\|") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
+              .conflicts[:40][] |
+              "| \(.risk) | \(.kind) | \(.area // "global") | `\(.target)` | \(.involved | join(", ") | cell) |"' "$JSON"
+            total=$(jq -r '.conflicts | length' "$JSON")
+            if [ "$total" -gt 40 ]; then
+              echo
+              echo "_Showing 40 of $total findings. Full JSON is in the step output._"
+            fi
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Comment on the pull request
+      if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        JSON: ${{ steps.scan.outputs.json }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        body="${RUNNER_TEMP}/ironclad-comment.md"
+        {
+          echo "### Ironclad — Magento conflict scan"
+          echo
+          echo "**Grade ${{ steps.scan.outputs.grade }}** · \
+        ${{ steps.scan.outputs.high }} high · \
+        ${{ steps.scan.outputs.medium }} medium · \
+        ${{ steps.scan.outputs.low }} low"
+          echo
+          # Finding text quotes Magento config verbatim, so it contains things like
+          # <sequence> and <block name="x">. GitHub markdown treats those as
+          # unknown HTML tags and strips them silently, so escape the brackets.
+          jq -r 'def md: gsub("<"; "&lt;") | gsub(">"; "&gt;");
+            [.conflicts[] | select(.risk == "High")] as $h
+            | if ($h | length) == 0 then "No high-risk conflicts."
+              else "<details open><summary>High-risk findings</summary>\n\n"
+                   + ([$h[:20][] | "- **\(.target | md)** (\(.area // "global"))\n  \(.detail | md)"] | join("\n"))
+                   + (if ($h | length) > 20 then "\n\nShowing 20 of \($h | length) high-risk findings." else "" end)
+                   + "\n\n</details>"
+              end' "$JSON"
+          echo
+          echo "_Plugin findings are matched per class, not per method — verify method overlap before acting._"
+        } > "$body"
+
+        # Update the existing comment rather than adding one per push.
+        marker="### Ironclad — Magento conflict scan"
+        existing=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
+          --jq "[.[] | select(.body | startswith(\"$marker\"))] | .[0].id // empty" || true)
+
+        if [ -n "$existing" ]; then
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" \
+            -F body=@"$body" > /dev/null
+          echo "Updated existing comment $existing"
+        else
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
+            -F body=@"$body" > /dev/null
+          echo "Posted a new comment"
+        fi
+
+    - name: Enforce result
+      shell: bash
+      env:
+        FAIL_ON: ${{ inputs.fail-on-conflicts }}
+        STATUS: ${{ steps.scan.outputs.status }}
+      run: |
+        if [ "$FAIL_ON" != "true" ]; then
+          echo "fail-on-conflicts is disabled; reporting only."
+          exit 0
+        fi
+        if [ "$STATUS" != "0" ]; then
+          echo "::error::Ironclad reported conflicts that should block this build."
+          exit 1
+        fi
+        echo "No blocking conflicts."
