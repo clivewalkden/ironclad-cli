@@ -179,6 +179,36 @@ or transitive `<sequence>` between the modules involved and ranks accordingly. W
 distinction a stock install reports around twenty "critical" conflicts that are all core working as
 intended.
 
+## Adopting it on an existing codebase
+
+A real install has dozens of findings on day one, none of them caused by the change you are
+reviewing. Gating CI on that means a permanently red build, and a permanently red build gets
+ignored. So record what is already there and gate on what comes next:
+
+```bash
+ironclad scan . --third-party --write-baseline .ironclad-baseline.json
+```
+
+Commit that file. From then on:
+
+```bash
+ironclad scan . --third-party --baseline .ironclad-baseline.json
+```
+
+Accepted findings are not shown and cannot fail the run; anything new is reported normally. The run
+still says how many were carried over, so a green build never pretends the codebase is clean.
+
+A finding is matched on its kind, area, target and the modules involved — deliberately not on its
+wording, its source file paths, or its risk level, so rewording a finding between releases, moving a
+vendor's files, or tightening a severity does not resurrect something you already accepted.
+
+Entries carry an occurrence count, because one class can legitimately produce two findings of the
+same shape (a plugin tie at two different `sortOrder`s, for instance). Accepting two does not accept
+a third.
+
+When entries stop matching anything, the run says so — those findings look fixed, and regenerating
+the baseline keeps it honest.
+
 ## Use it in CI
 
 Ironclad ships a composite GitHub Action. Add this to a Magento repo:
