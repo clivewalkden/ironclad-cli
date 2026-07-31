@@ -153,9 +153,10 @@ it renders from an email attachment and can go straight to a client.
 
 Magento declares plugins against a *class*, but two plugins on one class only interfere if they
 intercept the same *method*. Ironclad reads each plugin class's PHP to find out which, so plugins
-that provably touch different methods are not reported at all. On ten production installs this
-roughly halved the medium-risk findings — 109 to 66 on the worst — because those were the ones that
-used to say "verify method overlap manually".
+that provably touch different methods are not reported at all. On ten production installs this cut
+the medium-risk findings by around a third — 109 to 66 on the worst install — because those were the
+ones that used to say "verify method overlap manually". Correcting the default `sortOrder` in v0.9.1
+removed a further handful of false ties per install, taking that worst case to 62.
 
 It also makes the most damaging plugin mistake visible: an `around` plugin that never calls the
 callable it is given replaces the method outright, and every plugin with a higher `sortOrder` on that
