@@ -272,10 +272,13 @@ Worth reading before you trust a clean report:
 - **Plugins that inherit interceptor methods fall back to class-level comparison.** Method names are
   read from the plugin's own PHP, so a plugin whose `afterGetName` lives in a parent class reports no
   methods and its findings say the overlap is unverified rather than guessing.
-- **No cross-area precedence.** `global` and each specific area are analysed separately, so a genuine
-  global-versus-frontend conflict is missed.
-- **Every module on disk is assumed enabled.** `app/etc/config.php` is not read, so a disabled module
-  is still analysed.
+- **Cross-area precedence is not modelled.** `global` and each area are analysed separately. Magento
+  layers an area's `di.xml` over the global one, so an area declaration wins in that area — which
+  makes a global-versus-frontend pair deterministic rather than an unpinned collision. The
+  informational case, where a class behaves differently per area, is not reported.
+- **Without `app/etc/config.php` there is no enabled state or real load order.** On a real install
+  both are read and used. Scanning a bare `vendor/` tree or a zip has neither, so every module is
+  assumed enabled and unsequenced load order falls back to a deterministic guess.
 - **Layout coverage is module-level.** Theme overrides under `app/design/**` are not merged, and
   handles are compared in isolation.
 - **Virtual types are not resolved transitively.** A name collision is reported, but a preference or
